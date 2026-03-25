@@ -1,55 +1,9 @@
 'use client'
 
-import { useState } from 'react'
-import { Plus, Settings, Zap, MessageSquare, Code, FileText, Search } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Plus, Settings, Zap, MessageSquare, Search, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-
-interface AgentInfo {
-  id: string
-  name: string
-  description: string
-  avatar: string
-  color: string
-  provider: string
-  model: string
-  status: 'online' | 'busy' | 'offline'
-  capabilities: string[]
-  tasksCompleted: number
-  avgResponseTime: string
-}
-
-const mockAgents: AgentInfo[] = [
-  {
-    id: '1', name: '内容选题 Agent', description: '分析热点趋势，生成内容选题方向和优先级建议',
-    avatar: '📊', color: 'bg-green-500', provider: 'Anthropic', model: 'Claude Sonnet',
-    status: 'online', capabilities: ['数据分析', '趋势预测', '选题策划'], tasksCompleted: 142, avgResponseTime: '38s',
-  },
-  {
-    id: '2', name: '数据复盘 Agent', description: '自动拉取和分析内容数据，生成增长归因报告',
-    avatar: '📈', color: 'bg-purple-500', provider: 'OpenAI', model: 'GPT-4o',
-    status: 'busy', capabilities: ['数据采集', '归因分析', '报告生成'], tasksCompleted: 89, avgResponseTime: '2m15s',
-  },
-  {
-    id: '3', name: '热点监测 Agent', description: '7×24 小时监控全网热点，及时预警可跟进的热点',
-    avatar: '🔥', color: 'bg-orange-500', provider: 'Qwen', model: 'Qwen-3.5',
-    status: 'online', capabilities: ['实时监控', '热点分类', '时效性评估'], tasksCompleted: 567, avgResponseTime: '12s',
-  },
-  {
-    id: '4', name: '文案撰写 Agent', description: '根据选题和数据生成高转化率的内容文案',
-    avatar: '✍️', color: 'bg-blue-500', provider: 'Anthropic', model: 'Claude Opus',
-    status: 'online', capabilities: ['文案撰写', '标题优化', 'SEO'], tasksCompleted: 203, avgResponseTime: '1m05s',
-  },
-  {
-    id: '5', name: '封面设计 Agent', description: '自动生成和优化内容封面，A/B 测试不同方案',
-    avatar: '🎨', color: 'bg-pink-500', provider: 'OpenAI', model: 'DALL·E 3',
-    status: 'offline', capabilities: ['图片生成', '封面优化', 'A/B测试'], tasksCompleted: 78, avgResponseTime: '45s',
-  },
-  {
-    id: '6', name: '竞品分析 Agent', description: '监控竞品动态，分析内容策略差异',
-    avatar: '🔍', color: 'bg-cyan-500', provider: 'DeepSeek', model: 'DeepSeek-R1',
-    status: 'online', capabilities: ['竞品监控', '策略分析', '差异对比'], tasksCompleted: 34, avgResponseTime: '3m20s',
-  },
-]
+import { agentsApi, type Agent } from '@/lib/api'
 
 const statusMap = {
   online: { label: '在线', dot: 'bg-green-500' },
@@ -58,13 +12,30 @@ const statusMap = {
 }
 
 export default function AgentsPage() {
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
-  const selectedAgent = mockAgents.find((a) => a.id === selected)
-  const filtered = mockAgents.filter(
-    (a) => a.name.includes(searchQuery) || a.description.includes(searchQuery)
+  useEffect(() => {
+    agentsApi.list().then((data) => {
+      setAgents(data)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [])
+
+  const selectedAgent = agents.find((a) => a.id === selected)
+  const filtered = agents.filter(
+    (a) => a.name.includes(searchQuery) || a.description?.includes(searchQuery)
   )
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full">
@@ -72,7 +43,7 @@ export default function AgentsPage() {
       <div className="w-80 border-r border-border/40 flex flex-col">
         <div className="px-4 py-3 border-b border-border/40">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold">Agent 列表</h2>
+            <h2 className="text-sm font-semibold">Agent 列表 ({agents.length})</h2>
             <Button size="sm" variant="outline" className="h-7 gap-1 text-xs">
               <Plus className="h-3 w-3" /> 添加
             </Button>
@@ -90,7 +61,7 @@ export default function AgentsPage() {
         </div>
         <div className="flex-1 overflow-auto p-2 space-y-1">
           {filtered.map((agent) => {
-            const status = statusMap[agent.status]
+            const status = statusMap[agent.status] || statusMap.offline
             return (
               <div
                 key={agent.id}
@@ -101,7 +72,7 @@ export default function AgentsPage() {
                     : 'hover:bg-accent/50 border border-transparent'
                 }`}
               >
-                <div className={`h-10 w-10 rounded-full ${agent.color} flex items-center justify-center text-lg flex-shrink-0`}>
+                <div className="h-10 w-10 rounded-full flex items-center justify-center text-lg flex-shrink-0" style={{ backgroundColor: agent.color + '30' }}>
                   {agent.avatar}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -121,16 +92,15 @@ export default function AgentsPage() {
       {selectedAgent ? (
         <div className="flex-1 overflow-auto p-6">
           <div className="max-w-2xl mx-auto space-y-8">
-            {/* Header */}
             <div className="flex items-start gap-4">
-              <div className={`h-16 w-16 rounded-2xl ${selectedAgent.color} flex items-center justify-center text-2xl`}>
+              <div className="h-16 w-16 rounded-2xl flex items-center justify-center text-2xl" style={{ backgroundColor: selectedAgent.color + '30' }}>
                 {selectedAgent.avatar}
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-1">
                   <h2 className="text-xl font-semibold">{selectedAgent.name}</h2>
-                  <span className={`h-2.5 w-2.5 rounded-full ${statusMap[selectedAgent.status].dot}`} />
-                  <span className="text-sm text-muted-foreground">{statusMap[selectedAgent.status].label}</span>
+                  <span className={`h-2.5 w-2.5 rounded-full ${(statusMap[selectedAgent.status] || statusMap.offline).dot}`} />
+                  <span className="text-sm text-muted-foreground">{(statusMap[selectedAgent.status] || statusMap.offline).label}</span>
                 </div>
                 <p className="text-sm text-muted-foreground">{selectedAgent.description}</p>
               </div>
@@ -139,24 +109,21 @@ export default function AgentsPage() {
               </Button>
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-3 gap-4">
               <div className="rounded-xl border border-border/40 p-4">
                 <div className="text-xs text-muted-foreground mb-1">已完成任务</div>
-                <div className="text-2xl font-semibold">{selectedAgent.tasksCompleted}</div>
+                <div className="text-2xl font-semibold">{selectedAgent.tasks_completed}</div>
               </div>
               <div className="rounded-xl border border-border/40 p-4">
-                <div className="text-xs text-muted-foreground mb-1">平均响应</div>
-                <div className="text-2xl font-semibold">{selectedAgent.avgResponseTime}</div>
+                <div className="text-xs text-muted-foreground mb-1">供应商</div>
+                <div className="text-lg font-semibold">{selectedAgent.provider}</div>
               </div>
               <div className="rounded-xl border border-border/40 p-4">
                 <div className="text-xs text-muted-foreground mb-1">模型</div>
-                <div className="text-lg font-semibold">{selectedAgent.model}</div>
-                <div className="text-xs text-muted-foreground">{selectedAgent.provider}</div>
+                <div className="text-lg font-semibold truncate">{selectedAgent.model}</div>
               </div>
             </div>
 
-            {/* Capabilities */}
             <div>
               <h3 className="text-sm font-semibold mb-3">能力标签</h3>
               <div className="flex flex-wrap gap-2">
@@ -168,7 +135,6 @@ export default function AgentsPage() {
               </div>
             </div>
 
-            {/* Quick Actions */}
             <div>
               <h3 className="text-sm font-semibold mb-3">快捷操作</h3>
               <div className="grid grid-cols-2 gap-3">
