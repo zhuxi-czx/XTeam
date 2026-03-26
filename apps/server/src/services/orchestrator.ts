@@ -1,8 +1,7 @@
 /**
  * XTeam Orchestrator — 任务编排引擎
- * 简化版，复用 ClawMate V14 Orchestrator 的核心理念：
  * 1. 用户输入 → AI 规划 → 拆分子任务
- * 2. 按能力匹配 Agent → 并行执行
+ * 2. 按能力匹配 Agent → 串行执行（避免并发限制）
  * 3. 汇总结果 → 反馈给用户
  */
 
@@ -26,30 +25,42 @@ export async function planTasks(
   const messages: ChatMessage[] = [
     {
       role: 'system',
-      content: `你是一个任务规划专家。用户会给你一个目标，你需要拆解为可执行的子任务。
+      content: `你是一个任务规划专家。用户会给你一个目标，你需要拆解为 3-5 个可执行的子任务（不要超过5个）。
 每个子任务包含: title, description, capabilities（所需能力标签数组）。
-返回 JSON 数组格式，不要其他内容。
-示例: [{"title":"分析数据","description":"拉取近14天数据","capabilities":["data_analysis"]}]`,
+能力标签从这些中选择: content_planning, trend_analysis, data_analysis, reporting, monitoring, alerting, writing, seo, image_generation, design, competitive_analysis, research
+返回纯 JSON 数组，不要 markdown 代码块，不要其他内容。
+示例: [{"title":"分析数据","description":"拉取近14天数据并生成趋势报告","capabilities":["data_analysis"]}]`,
     },
     { role: 'user', content: userGoal },
   ];
 
   let result = '';
-  await chat(plannerConfig, messages, {
-    onChunk: (chunk) => { result += chunk; },
-    onDone: () => {},
-    onError: (err) => { throw err; },
+  
+  return new Promise<SubtaskPlan[]>((resolve) => {
+    chat(plannerConfig, messages, {
+      onChunk: (chunk) => { result += chunk; },
+      onDone: () => {
+        const jsonMatch = result.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) {
+          console.error('[Orchestrator] planTasks: no JSON found in result:', result.slice(0, 200));
+          resolve([]);
+          return;
+        }
+        try {
+          const plans = JSON.parse(jsonMatch[0]) as SubtaskPlan[];
+          console.log(`[Orchestrator] planTasks: ${plans.length} tasks planned`);
+          resolve(plans);
+        } catch (e) {
+          console.error('[Orchestrator] planTasks: JSON parse error:', e);
+          resolve([]);
+        }
+      },
+      onError: (err) => {
+        console.error('[Orchestrator] planTasks error:', err.message);
+        resolve([]);
+      },
+    });
   });
-
-  // 提取 JSON
-  const jsonMatch = result.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) return [];
-
-  try {
-    return JSON.parse(jsonMatch[0]) as SubtaskPlan[];
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -72,7 +83,6 @@ export function matchAgent(
     if (agent) return agent;
   }
 
-  // 兜底：任何在线 Agent
   const fallback = db.prepare(`
     SELECT id, name FROM agents WHERE status = 'online' LIMIT 1
   `).get() as { id: string; name: string } | undefined;
@@ -89,15 +99,13 @@ export function createTask(params: {
   description?: string;
   assigneeId?: string;
   assigneeName?: string;
-  goalId?: string;
-  parentTaskId?: string;
 }): string {
   const db = getDb();
   const id = nanoid(12);
 
   db.prepare(`
-    INSERT INTO tasks (id, conversation_id, title, description, assignee_id, assignee_name, goal_id, parent_task_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tasks (id, conversation_id, title, description, assignee_id, assignee_name)
+    VALUES (?, ?, ?, ?, ?, ?)
   `).run(
     id,
     params.conversationId ?? null,
@@ -105,15 +113,13 @@ export function createTask(params: {
     params.description ?? null,
     params.assigneeId ?? null,
     params.assigneeName ?? null,
-    params.goalId ?? null,
-    params.parentTaskId ?? null,
   );
 
   return id;
 }
 
 /**
- * Step 4: 执行单个任务（调用 Agent）
+ * Step 4: 执行单个任务（调用 Agent LLM）
  */
 export async function executeTask(
   taskId: string,
@@ -123,63 +129,72 @@ export async function executeTask(
 ): Promise<string> {
   const db = getDb();
 
-  // 标记开始
   db.prepare(`UPDATE tasks SET status = 'running', updated_at = datetime('now') WHERE id = ?`).run(taskId);
+  console.log(`[Orchestrator] executeTask ${taskId} starting (${agentConfig.provider}/${agentConfig.model})`);
 
-  let fullResult = '';
-  let charCount = 0;
+  return new Promise<string>((resolve, reject) => {
+    let fullResult = '';
+    let charCount = 0;
 
-  await chat(agentConfig, [
-    { role: 'system', content: '你是一个专业的执行 Agent。完成分配给你的任务，输出结构化结果。' },
-    { role: 'user', content: prompt },
-  ], {
-    onChunk: (chunk) => {
-      fullResult += chunk;
-      charCount += chunk.length;
-      // 模拟进度
-      const progress = Math.min(95, Math.floor(charCount / 20));
-      onProgress(progress, chunk);
-      db.prepare(`UPDATE tasks SET progress = ?, updated_at = datetime('now') WHERE id = ?`).run(progress, taskId);
-    },
-    onDone: (text) => {
-      fullResult = text;
-      db.prepare(`
-        UPDATE tasks SET status = 'completed', progress = 100, result = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `).run(text, taskId);
-    },
-    onError: (err) => {
-      db.prepare(`
-        UPDATE tasks SET status = 'failed', result = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `).run(err.message, taskId);
-    },
+    chat(agentConfig, [
+      { role: 'system', content: '你是一个专业的执行 Agent。完成分配给你的任务，输出结构化、简洁的结果。控制在 300 字以内。' },
+      { role: 'user', content: prompt },
+    ], {
+      onChunk: (chunk) => {
+        fullResult += chunk;
+        charCount += chunk.length;
+        const progress = Math.min(95, Math.floor(charCount / 10));
+        try { onProgress(progress, chunk); } catch { /* ignore callback errors */ }
+        db.prepare(`UPDATE tasks SET progress = ?, updated_at = datetime('now') WHERE id = ?`).run(progress, taskId);
+      },
+      onDone: (text) => {
+        fullResult = text;
+        db.prepare(`
+          UPDATE tasks SET status = 'completed', progress = 100, result = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(text, taskId);
+
+        // 更新 Agent 统计
+        const task = db.prepare(`SELECT assignee_id FROM tasks WHERE id = ?`).get(taskId) as { assignee_id: string } | undefined;
+        if (task?.assignee_id) {
+          db.prepare(`UPDATE agents SET tasks_completed = tasks_completed + 1 WHERE id = ?`).run(task.assignee_id);
+        }
+
+        console.log(`[Orchestrator] executeTask ${taskId} completed (${text.length} chars)`);
+        resolve(fullResult);
+      },
+      onError: (err) => {
+        console.error(`[Orchestrator] executeTask ${taskId} failed:`, err.message);
+        db.prepare(`
+          UPDATE tasks SET status = 'failed', result = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(err.message, taskId);
+        reject(err);
+      },
+    });
   });
-
-  // 更新 Agent 统计
-  const task = db.prepare(`SELECT assignee_id FROM tasks WHERE id = ?`).get(taskId) as { assignee_id: string } | undefined;
-  if (task?.assignee_id) {
-    db.prepare(`UPDATE agents SET tasks_completed = tasks_completed + 1 WHERE id = ?`).run(task.assignee_id);
-  }
-
-  return fullResult;
 }
 
 /**
- * 完整编排流程：目标 → 规划 → 匹配 → 执行 → 汇总
+ * 完整编排流程：目标 → 规划 → 匹配 → 串行执行 → 汇总
+ * 回调全部容错：SSE 写入失败不中断执行
  */
 export async function orchestrate(params: {
   conversationId: string;
   userGoal: string;
   plannerConfig: LLMConfig;
-  onTaskCreated: (taskId: string, title: string, agentName: string) => void;
-  onTaskProgress: (taskId: string, progress: number, chunk: string) => void;
-  onComplete: (results: { taskId: string; title: string; result: string }[]) => void;
+  onTaskCreated: (taskId: string, title: string, agentName: string) => void | Promise<void>;
+  onTaskProgress: (taskId: string, progress: number, chunk: string) => void | Promise<void>;
+  onComplete: (results: { taskId: string; title: string; result: string }[]) => void | Promise<void>;
 }): Promise<void> {
+  const db = getDb();
+
   // 1. 规划
+  console.log(`[Orchestrator] planning for: "${params.userGoal}"`);
   const plans = await planTasks(params.userGoal, params.plannerConfig);
   if (plans.length === 0) {
-    params.onComplete([]);
+    console.log('[Orchestrator] no plans generated, aborting');
+    try { await params.onComplete([]); } catch {}
     return;
   }
 
@@ -188,7 +203,10 @@ export async function orchestrate(params: {
 
   for (const plan of plans) {
     const agent = matchAgent(plan.capabilities);
-    if (!agent) continue;
+    if (!agent) {
+      console.warn(`[Orchestrator] no agent found for capabilities: ${plan.capabilities}`);
+      continue;
+    }
 
     const taskId = createTask({
       conversationId: params.conversationId,
@@ -199,26 +217,43 @@ export async function orchestrate(params: {
     });
 
     taskEntries.push({ taskId, plan, agent });
-    params.onTaskCreated(taskId, plan.title, agent.name);
+    try { await params.onTaskCreated(taskId, plan.title, agent.name); } catch (e) {
+      console.warn('[Orchestrator] onTaskCreated callback error (ignored):', e);
+    }
   }
 
-  // 3. 并行执行
-  const results = await Promise.allSettled(
-    taskEntries.map(async ({ taskId, plan, agent }) => {
+  console.log(`[Orchestrator] ${taskEntries.length} tasks created, starting execution`);
+
+  // 3. 串行执行（避免 DashScope 并发限制）
+  const results: { taskId: string; title: string; result: string }[] = [];
+
+  for (const { taskId, plan, agent } of taskEntries) {
+    // 获取 Agent 的 LLM 配置
+    const agentRow = db.prepare('SELECT provider, model FROM agents WHERE id = ?').get(agent.id) as any;
+    const agentConfig: LLMConfig = {
+      provider: agentRow?.provider || 'dashscope',
+      model: agentRow?.model || 'qwen-plus',
+    };
+
+    try {
       const result = await executeTask(
         taskId,
-        { ...params.plannerConfig, model: '' },  // TODO: 从 agent 配置取 model
+        agentConfig,
         `任务: ${plan.title}\n描述: ${plan.description}`,
-        (progress, chunk) => params.onTaskProgress(taskId, progress, chunk),
+        (progress, chunk) => {
+          try { params.onTaskProgress(taskId, progress, chunk); } catch {}
+        },
       );
-      return { taskId, title: plan.title, result };
-    })
-  );
+      results.push({ taskId, title: plan.title, result });
+    } catch (err) {
+      console.error(`[Orchestrator] task ${taskId} "${plan.title}" failed:`, err);
+      results.push({ taskId, title: plan.title, result: `[执行失败] ${err}` });
+    }
+  }
 
   // 4. 汇总
-  const completed = results
-    .filter((r): r is PromiseFulfilledResult<{ taskId: string; title: string; result: string }> => r.status === 'fulfilled')
-    .map(r => r.value);
-
-  params.onComplete(completed);
+  console.log(`[Orchestrator] all done: ${results.length} tasks processed`);
+  try { await params.onComplete(results); } catch (e) {
+    console.warn('[Orchestrator] onComplete callback error (ignored):', e);
+  }
 }

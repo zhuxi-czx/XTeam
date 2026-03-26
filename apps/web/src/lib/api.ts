@@ -204,3 +204,76 @@ export function sendChatMessage(
 
   return controller;
 }
+
+// ── Orchestrate (SSE Streaming) ──
+
+export interface OrchestrateCallbacks {
+  onStart?: (goal: string) => void;
+  onTaskCreated?: (taskId: string, title: string, agentName: string) => void;
+  onTaskProgress?: (taskId: string, progress: number) => void;
+  onDone?: (taskCount: number, summary: string) => void;
+  onError?: (error: string) => void;
+}
+
+export function startOrchestration(
+  conversationId: string,
+  goal: string,
+  callbacks: OrchestrateCallbacks,
+): AbortController {
+  const controller = new AbortController();
+
+  fetch(\`\${API_BASE}/api/orchestrate\`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversationId, goal }),
+    signal: controller.signal,
+  }).then(async (res) => {
+    if (!res.ok) {
+      callbacks.onError?.(\`HTTP \${res.status}\`);
+      return;
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) return;
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const parsed = JSON.parse(line.slice(6));
+            switch (parsed.type) {
+              case 'orchestrate:start':
+                callbacks.onStart?.(parsed.goal);
+                break;
+              case 'task:created':
+                callbacks.onTaskCreated?.(parsed.taskId, parsed.title, parsed.agentName);
+                break;
+              case 'task:progress':
+                callbacks.onTaskProgress?.(parsed.taskId, parsed.progress);
+                break;
+              case 'orchestrate:done':
+                callbacks.onDone?.(parsed.taskCount, parsed.summary);
+                break;
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    }
+  }).catch((err) => {
+    if (err.name !== 'AbortError') {
+      callbacks.onError?.(err.message);
+    }
+  });
+
+  return controller;
+}

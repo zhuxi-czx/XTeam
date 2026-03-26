@@ -1,36 +1,73 @@
 'use client'
 
+interface TaskItem {
+  title: string
+  status: string
+  progress?: number
+  agentName?: string
+}
+
 interface ContextPanelProps {
-  tasks: { title: string; status: string; color: string }[]
+  tasks: TaskItem[]
   agents: { name: string; status: string; color: string }[]
   goals: string[]
   memories: string[]
   decisions: string[]
 }
 
+const statusConfig: Record<string, { label: string; color: string; bg: string }> = {
+  queued: { label: '排队中', color: 'text-zinc-400', bg: 'bg-zinc-500/20' },
+  running: { label: '执行中', color: 'text-blue-400', bg: 'bg-blue-500/20' },
+  completed: { label: '已完成', color: 'text-green-400', bg: 'bg-green-500/20' },
+  failed: { label: '失败', color: 'text-red-400', bg: 'bg-red-500/20' },
+  cancelled: { label: '已取消', color: 'text-zinc-500', bg: 'bg-zinc-500/10' },
+}
+
 export function ContextPanel({ tasks, agents, goals, memories, decisions }: ContextPanelProps) {
   return (
     <div className="w-80 overflow-auto p-5 space-y-6 border-l border-border/40">
-      {/* 当前任务 */}
+      {/* 任务看板 */}
       <section>
-        <h3 className="text-sm font-semibold mb-3">当前任务</h3>
-        <div className="space-y-2">
-          {tasks.map((task) => (
-            <div key={task.title} className="rounded-lg border border-border/40 px-3 py-2.5">
-              <div className="text-sm font-medium">{task.title}</div>
-              <div className={`text-xs ${task.color}`}>{task.status}</div>
-            </div>
-          ))}
-        </div>
+        <h3 className="text-sm font-semibold mb-3">
+          任务 <span className="text-muted-foreground font-normal">({tasks.length})</span>
+        </h3>
+        {tasks.length === 0 ? (
+          <p className="text-xs text-muted-foreground">暂无任务。输入 <code className="bg-muted px-1 rounded">/目标</code> 启动编排</p>
+        ) : (
+          <div className="space-y-2">
+            {tasks.map((task) => {
+              const sc = statusConfig[task.status] || statusConfig.queued
+              return (
+                <div key={task.title} className="rounded-lg border border-border/40 px-3 py-2.5">
+                  <div className="text-sm font-medium mb-1">{task.title}</div>
+                  <div className="flex items-center justify-between">
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${sc.bg} ${sc.color}`}>{sc.label}</span>
+                    {task.agentName && (
+                      <span className="text-xs text-muted-foreground">🤖 {task.agentName}</span>
+                    )}
+                  </div>
+                  {task.status === 'running' && task.progress !== undefined && (
+                    <div className="mt-2 h-1 rounded-full bg-muted overflow-hidden">
+                      <div
+                        className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                        style={{ width: `${task.progress}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </section>
 
-      {/* 当前参与 Agent */}
+      {/* Agent 列表 */}
       <section>
-        <h3 className="text-sm font-semibold mb-3">当前参与 Agent</h3>
+        <h3 className="text-sm font-semibold mb-3">Agent</h3>
         <div className="space-y-2">
           {agents.map((agent) => (
             <div key={agent.name} className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-accent/50 cursor-pointer transition-colors">
-              <div className={`h-8 w-8 rounded-full ${agent.color} flex items-center justify-center text-white text-xs`}>🤖</div>
+              <div className="h-8 w-8 rounded-full bg-violet-500/20 flex items-center justify-center text-sm">🤖</div>
               <div>
                 <div className="text-sm font-medium">{agent.name}</div>
                 <div className="text-xs text-muted-foreground">{agent.status}</div>
@@ -40,7 +77,7 @@ export function ContextPanel({ tasks, agents, goals, memories, decisions }: Cont
         </div>
       </section>
 
-      {/* 关联目标 */}
+      {/* 目标 */}
       <section>
         <h3 className="text-sm font-semibold mb-3">关联目标</h3>
         <div className="space-y-1.5">
@@ -52,7 +89,7 @@ export function ContextPanel({ tasks, agents, goals, memories, decisions }: Cont
         </div>
       </section>
 
-      {/* 相关记忆 */}
+      {/* 记忆 */}
       <section>
         <h3 className="text-sm font-semibold mb-3">相关记忆</h3>
         <div className="space-y-1.5">

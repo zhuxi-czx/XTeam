@@ -6,6 +6,7 @@ import { agents } from './routes/agents.js';
 import { conversations } from './routes/conversations.js';
 import { tasks } from './routes/tasks.js';
 import { chatRouter } from './routes/chat.js';
+import { orchestrateRouter } from './routes/orchestrate.js';
 import { getDb } from './db/database.js';
 import { nanoid } from 'nanoid';
 
@@ -27,6 +28,7 @@ app.route('/api/agents', agents);
 app.route('/api/conversations', conversations);
 app.route('/api/tasks', tasks);
 app.route('/api/chat', chatRouter);
+app.route('/api/orchestrate', orchestrateRouter);
 
 // Seed default agents if empty
 function seedAgents() {

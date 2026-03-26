@@ -8,14 +8,13 @@ const chatRouter = new Hono();
 
 /**
  * POST /chat/:conversationId/send — 发送消息 + 流式 AI 回复
- * 前端通过 SSE 接收流式响应
  */
 chatRouter.post('/:conversationId/send', async (c) => {
   const conversationId = c.req.param('conversationId');
   const body = await c.req.json<{
     content: string;
     senderName: string;
-    agentId?: string;  // 指定回复的 Agent，不指定则用默认
+    agentId?: string;
   }>();
   const db = getDb();
 
@@ -38,49 +37,57 @@ chatRouter.post('/:conversationId/send', async (c) => {
     content: m.content,
   }));
 
-  // 3. 获取 Agent 配置
+  // 3. 获取 Agent 配置 → LLM 配置
   let agentConfig: LLMConfig = {
-    provider: 'openclaw',
-    model: 'claude-sonnet-4-20250514',
-    gatewayUrl: 'http://127.0.0.1:18789',
+    provider: 'dashscope',
+    model: 'qwen-plus',
   };
+  let agentName = 'AI 助手';
 
   if (body.agentId) {
     const agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(body.agentId) as any;
     if (agent) {
+      agentName = agent.name;
       agentConfig = {
-        provider: agent.provider,
-        model: agent.model,
-        gatewayUrl: 'http://127.0.0.1:18789',
+        provider: agent.provider || 'dashscope',
+        model: agent.model || 'qwen-plus',
       };
     }
   }
 
-  // 4. 流式返回
+  // 4. 添加 system prompt
+  const systemMessage: ChatMessage = {
+    role: 'system',
+    content: `你是「${agentName}」，XTeam 人机协同平台中的一个专业 AI Agent。
+用中文回答，保持专业、简洁。如果用户的问题与你的专长无关，仍然友好地回答。`,
+  };
+
+  const fullMessages = [systemMessage, ...messages];
+
+  console.log(`[Chat] conv=${conversationId} agent=${agentName} provider=${agentConfig.provider} model=${agentConfig.model}`);
+
+  // 5. 流式返回
   return streamSSE(c, async (stream) => {
     const aiMsgId = nanoid(12);
-    let fullText = '';
 
-    // 发送 msg_id
     await stream.writeSSE({ data: JSON.stringify({ type: 'start', msgId: aiMsgId }), event: 'message' });
 
-    await chat(agentConfig, messages, {
+    await chat(agentConfig, fullMessages, {
       onChunk: async (chunk) => {
-        fullText += chunk;
         await stream.writeSSE({ data: JSON.stringify({ type: 'chunk', content: chunk }), event: 'message' });
       },
       onDone: async (text) => {
-        // 保存 AI 消息
         db.prepare(`
           INSERT INTO messages (id, conversation_id, sender_id, sender_type, sender_name, content)
-          VALUES (?, ?, ?, 'agent', 'AI 助手', ?)
-        `).run(aiMsgId, conversationId, body.agentId || 'default', text);
+          VALUES (?, ?, ?, 'agent', ?, ?)
+        `).run(aiMsgId, conversationId, body.agentId || 'default', agentName, text);
 
         db.prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(conversationId);
 
         await stream.writeSSE({ data: JSON.stringify({ type: 'done', msgId: aiMsgId, content: text }), event: 'message' });
       },
       onError: async (err) => {
+        console.error(`[Chat Error]`, err.message);
         await stream.writeSSE({ data: JSON.stringify({ type: 'error', error: err.message }), event: 'message' });
       },
     });
