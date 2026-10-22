@@ -24,9 +24,12 @@ export interface StreamCallbacks {
 }
 
 // ========== Provider 配置 ==========
-// 从环境变量读取，有合理默认值
+// 密钥只从环境变量读取（见 apps/server/.env.example），不要写进代码
 
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
+if (!DASHSCOPE_API_KEY) {
+  console.warn('[LLM] 未设置 DASHSCOPE_API_KEY，对话和编排会失败。请在 apps/server/.env 中配置。');
+}
 const DASHSCOPE_BASE_URL = process.env.DASHSCOPE_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 
