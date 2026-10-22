@@ -1,92 +1,120 @@
 'use client'
 
+import { Suspense, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
+import { House, ChatsCircle, CheckSquare, Robot, Plus, type Icon } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
-import {
-  LayoutDashboard,
-  MessageSquare,
-  CheckSquare,
-  Bot,
-  Target,
-  Brain,
-  IterationCw,
-} from 'lucide-react'
+import { agentsApi, conversationsApi, tasksApi, type Conversation } from '@/lib/api'
+import { MyAvatar, ME } from '@/components/xt/primitives'
 
-const navItems = [
-  { href: '/', label: '工作台', icon: LayoutDashboard },
-  { href: '/conversation', label: '对话', icon: MessageSquare },
-  { href: '/tasks', label: '任务', icon: CheckSquare },
-  { href: '/agents', label: 'Agent', icon: Bot },
-  { href: '/goals', label: '目标', icon: Target },
-  { href: '/memory', label: '记忆', icon: Brain },
-  { href: '/feedback', label: '回流', icon: IterationCw },
-]
+interface NavItem {
+  href: string
+  label: string
+  icon: Icon
+  count?: number
+}
 
 export function Sidebar() {
   const pathname = usePathname()
+  const [convs, setConvs] = useState<Conversation[]>([])
+  const [runningTasks, setRunningTasks] = useState(0)
+  const [agentCount, setAgentCount] = useState(0)
+
+  useEffect(() => {
+    conversationsApi.list().then(setConvs).catch(() => {})
+    tasksApi.list('running').then((t) => setRunningTasks(t.length)).catch(() => {})
+    agentsApi.list().then((a) => setAgentCount(a.length)).catch(() => {})
+  }, [pathname])
+
+  const nav: NavItem[] = [
+    { href: '/', label: '工作台', icon: House },
+    { href: '/conversation', label: '对话', icon: ChatsCircle },
+    { href: '/tasks', label: '任务', icon: CheckSquare, count: runningTasks || undefined },
+    { href: '/agents', label: 'Agent', icon: Robot, count: agentCount || undefined },
+  ]
 
   return (
-    <aside className="flex h-full w-60 flex-col border-r border-border/40 bg-background">
-      {/* Logo + Workspace */}
-      <div className="flex items-center gap-3 px-5 py-5">
-        <div className="flex h-10 w-10 items-center justify-content rounded-xl bg-gradient-to-br from-violet-500 to-blue-500 text-white font-bold text-sm">
+    <aside className="flex h-full w-60 shrink-0 flex-col gap-5 px-2 py-4">
+      <div className="flex items-center gap-2.5 px-2">
+        <div
+          className="flex size-7 items-center justify-center rounded-lg text-[11px] font-semibold text-white"
+          style={{ background: 'linear-gradient(135deg, #33d6c0 0%, #5083fb 30%, #336df4 55%, #4752e6 78%, #8d55ed 100%)' }}
+        >
           XT
         </div>
-        <div>
-          <h1 className="text-sm font-semibold">新增长实验室</h1>
-          <p className="text-xs text-muted-foreground">Growth Lab</p>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-ink">新增长实验室</div>
+          <div className="text-xs text-ink-3">Growth Lab</div>
         </div>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-2 space-y-1">
-        {navItems.map((item) => {
-          const isActive =
-            item.href === '/'
-              ? pathname === '/'
-              : pathname.startsWith(item.href)
+      <nav className="flex flex-col gap-1">
+        {nav.map((item) => {
+          const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)
+          const Icon = item.icon
           return (
             <Link
               key={item.href}
               href={item.href}
               className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
-                  : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                'flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors',
+                active ? 'bg-surface font-medium text-ink' : 'text-ink-2 hover:bg-white/60',
               )}
             >
-              <item.icon className="h-[18px] w-[18px]" />
-              {item.label}
+              <Icon weight="fill" size={18} className={active ? 'text-brand' : 'text-ink-2'} />
+              <span className="flex-1">{item.label}</span>
+              {item.count !== undefined && <span className="text-xs text-ink-3">{item.count}</span>}
             </Link>
           )
         })}
       </nav>
 
-      {/* Pinned Conversations */}
-      <div className="border-t border-border/40 px-4 py-3">
-        <p className="text-xs text-muted-foreground mb-2">置顶对话</p>
-        <div className="space-y-1.5">
-          {[
-            { title: '内容增长策略', status: '进行中', count: '3 人' },
-            { title: '产品体验优化', status: '待确认', count: '2 人' },
-            { title: '用户反馈分析', status: '已完成', count: '4 人' },
-          ].map((conv) => (
-            <div
-              key={conv.title}
-              className="rounded-lg px-3 py-2 text-sm cursor-pointer hover:bg-accent transition-colors"
-            >
-              <div className="font-medium text-sm">{conv.title}</div>
-              <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                <span>{conv.status}</span>
-                <span>·</span>
-                <span>{conv.count}</span>
-              </div>
-            </div>
-          ))}
+      <div className="flex min-h-0 flex-1 flex-col gap-1">
+        <div className="flex items-center px-3 py-1">
+          <span className="flex-1 text-xs text-ink-3">最近对话</span>
+          <Link href="/" aria-label="发起新目标" className="text-ink-3 hover:text-ink-2">
+            <Plus size={14} />
+          </Link>
+        </div>
+        <Suspense>
+          <RecentConversations convs={convs.slice(0, 6)} />
+        </Suspense>
+      </div>
+
+      <div className="flex items-center gap-2.5 px-2">
+        <MyAvatar size={28} />
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-ink">{ME.name}</div>
+          <div className="text-xs text-ink-3">{ME.role}</div>
         </div>
       </div>
     </aside>
+  )
+}
+
+function RecentConversations({ convs }: { convs: Conversation[] }) {
+  const pathname = usePathname()
+  const activeId = useSearchParams().get('id')
+
+  return (
+    <div className="flex flex-col gap-0.5 overflow-y-auto">
+      {convs.map((c, i) => {
+        // 未指定 id 时，对话页默认打开第一个对话
+        const active = pathname.startsWith('/conversation') && (activeId ? activeId === c.id : i === 0)
+        return (
+          <Link
+            key={c.id}
+            href={`/conversation?id=${c.id}`}
+            className={cn(
+              'truncate rounded-lg px-3 py-1.5 text-sm transition-colors',
+              active ? 'bg-white/70 text-ink' : 'text-ink-2 hover:bg-white/60',
+            )}
+          >
+            {c.title}
+          </Link>
+        )
+      })}
+    </div>
   )
 }

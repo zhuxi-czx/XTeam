@@ -1,274 +1,310 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { MessageItem, type MessageData } from '@/components/conversation/message-item'
-import { ChatInput } from '@/components/conversation/chat-input'
-import { ContextPanel } from '@/components/conversation/context-panel'
-import { conversationsApi, sendChatMessage, agentsApi, startOrchestration, tasksApi, type Message, type Agent, type Task } from '@/lib/api'
-import { Loader2, Zap } from 'lucide-react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import NextImage from 'next/image'
+import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { CircleNotch, WarningCircle } from '@phosphor-icons/react'
+import { MessageItem, type ChatItem } from '@/components/conversation/message-item'
+import type { PlanStep } from '@/components/conversation/plan-card'
+import { Composer } from '@/components/xt/composer'
+import { AgentAvatar, MyAvatar, Tag, ME } from '@/components/xt/primitives'
+import { shortAgentName } from '@/lib/agent-style'
+import {
+  conversationsApi,
+  sendChatMessage,
+  startOrchestration,
+  tasksApi,
+  type Conversation,
+  type Message,
+  type Task,
+} from '@/lib/api'
 
-const DEMO_CONV_TITLE = '内容增长策略讨论'
+const DEFAULT_TITLE = '内容增长策略讨论'
 const STREAMING_ID = '__streaming__'
+const LIVE_PLAN_ID = '__live_plan__'
+const GOAL_PREFIX = '🎯 编排目标：'
 
-function toMessageData(m: Message): MessageData {
-  return {
-    id: m.id,
-    senderName: m.sender_name,
-    senderType: m.sender_type,
-    senderAvatar: m.sender_type === 'human' ? '张' : m.sender_type === 'system' ? '⚙' : '✦',
-    senderColor: m.sender_type === 'human' ? 'bg-violet-500' : m.sender_type === 'system' ? 'bg-amber-500' : 'bg-gradient-to-br from-violet-500 to-blue-500',
-    content: m.content,
-    timestamp: new Date(m.created_at + 'Z').toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+function fmtTime(sqliteUtc: string | Date) {
+  const d = typeof sqliteUtc === 'string' ? new Date(sqliteUtc.replace(' ', 'T') + 'Z') : sqliteUtc
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+/** 把后端存储的消息还原成界面元素：连续的任务创建消息合并成一张执行计划卡片 */
+function toChatItems(messages: Message[]): ChatItem[] {
+  const items: ChatItem[] = []
+  for (const m of messages) {
+    const time = fmtTime(m.created_at)
+    if (m.sender_type === 'human') {
+      const isGoal = m.content.startsWith(GOAL_PREFIX)
+      items.push({ kind: 'human', id: m.id, time, isGoal, content: isGoal ? m.content.slice(GOAL_PREFIX.length) : m.content })
+    } else if (m.sender_type === 'agent') {
+      items.push({ kind: 'agent', id: m.id, time, name: m.sender_name, content: m.content })
+    } else if (m.content_type === 'task_card') {
+      const meta = safeJson<{ taskId: string; agentName: string }>(m.metadata)
+      const title = m.content.match(/任务创建：(.+)/)?.[1] ?? m.content
+      if (!meta) continue
+      const step: PlanStep = { taskId: meta.taskId, title, agentName: meta.agentName }
+      const last = items[items.length - 1]
+      if (last?.kind === 'plan') last.steps.push(step)
+      else items.push({ kind: 'plan', id: m.id, time, steps: [step] })
+    } else if (m.content_type === 'insight') {
+      const sections = m.content
+        .replace(/^##[^\n]*\n+/, '')
+        .split(/\n-{3,}\n/)
+        .map((chunk) => {
+          const match = chunk.trim().match(/^###\s*(.+)\n([\s\S]*)$/)
+          return match ? { title: match[1], body: match[2].trim() } : { title: '结果', body: chunk.trim() }
+        })
+        .filter((s) => s.body)
+      items.push({ kind: 'summary', id: m.id, time, sections })
+    } else {
+      items.push({ kind: 'note', id: m.id, time, content: m.content })
+    }
+  }
+  return items
+}
+
+function safeJson<T>(s: string | null): T | null {
+  try {
+    return s ? (JSON.parse(s) as T) : null
+  } catch {
+    return null
   }
 }
 
 export default function ConversationPage() {
-  const [messages, setMessages] = useState<MessageData[]>([])
-  const [convId, setConvId] = useState<string | null>(null)
-  const [agents, setAgents] = useState<Agent[]>([])
+  return (
+    <Suspense fallback={<PageSpinner />}>
+      <ConversationView />
+    </Suspense>
+  )
+}
+
+function ConversationView() {
+  const router = useRouter()
+  const params = useSearchParams()
+  const idParam = params.get('id')
+  const goalParam = params.get('goal')
+
+  const [conv, setConv] = useState<Conversation | null>(null)
+  const [items, setItems] = useState<ChatItem[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
-  const [isStreaming, setIsStreaming] = useState(false)
-  const [isOrchestrating, setIsOrchestrating] = useState(false)
+  const [busy, setBusy] = useState<'chat' | 'orchestrate' | null>(null)
   const [loading, setLoading] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const streamTextRef = useRef('')
+  const goalStarted = useRef<string | null>(null)
 
-  const scrollToBottom = useCallback(() => {
-    requestAnimationFrame(() => {
-      if (scrollRef.current) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-      }
-    })
-  }, [])
-
-  useEffect(() => { scrollToBottom() }, [messages, scrollToBottom])
-
-  // 轮询任务（编排时用）
   const refreshTasks = useCallback(async () => {
     try {
-      const list = await tasksApi.list()
-      setTasks(list)
-    } catch { /* ignore */ }
+      setTasks(await tasksApi.list())
+    } catch {
+      /* 保留旧数据 */
+    }
   }, [])
 
+  const reloadMessages = useCallback(async (id: string) => {
+    const msgs = await conversationsApi.messages(id)
+    setItems(toChatItems(msgs))
+  }, [])
+
+  // 选中对话：URL 指定的 id，否则默认第一个，一个都没有就新建
   useEffect(() => {
+    let cancelled = false
     async function init() {
       try {
-        const [convs, agentList] = await Promise.all([
-          conversationsApi.list(),
-          agentsApi.list(),
-        ])
-        setAgents(agentList)
-
-        let conv = convs.find(c => c.title === DEMO_CONV_TITLE)
-        if (!conv) {
-          const { id } = await conversationsApi.create({ title: DEMO_CONV_TITLE, creatorName: '创始人 · 张轩' })
-          setConvId(id)
-        } else {
-          setConvId(conv.id)
-          const msgs = await conversationsApi.messages(conv.id)
-          setMessages(msgs.map(toMessageData))
+        const list = await conversationsApi.list()
+        let target = idParam ? list.find((c) => c.id === idParam) : list[0]
+        if (!target) {
+          const { id } = await conversationsApi.create({ title: DEFAULT_TITLE, creatorName: ME.name })
+          target = (await conversationsApi.list()).find((c) => c.id === id)
         }
-
-        await refreshTasks()
+        if (cancelled || !target) return
+        setConv(target)
+        await Promise.all([reloadMessages(target.id), refreshTasks()])
       } catch (err) {
-        console.error('Init error:', err)
+        console.error('加载对话失败', err)
       }
-      setLoading(false)
+      if (!cancelled) setLoading(false)
     }
     init()
-  }, [refreshTasks])
-
-  const handleOrchestrate = (goal: string) => {
-    if (!convId) return
-    setIsOrchestrating(true)
-
-    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-
-    // 用户目标消息
-    setMessages(prev => [...prev, {
-      id: `goal-${Date.now()}`,
-      senderName: '创始人 · 张轩',
-      senderType: 'human',
-      senderAvatar: '张',
-      senderColor: 'bg-violet-500',
-      content: `🎯 编排目标：${goal}`,
-      timestamp: now,
-    }])
-
-    // 编排状态消息
-    const orchestrateStatusId = `orch-${Date.now()}`
-    setMessages(prev => [...prev, {
-      id: orchestrateStatusId,
-      senderName: '编排引擎',
-      senderType: 'system',
-      senderAvatar: '⚡',
-      senderColor: 'bg-amber-500',
-      content: '🔄 正在规划任务...',
-      timestamp: now,
-    }])
-
-    const createdTasks: string[] = []
-
-    startOrchestration(convId, goal, {
-      onStart: () => {
-        setMessages(prev => prev.map(m =>
-          m.id === orchestrateStatusId ? { ...m, content: '🧠 AI 正在分析目标、拆解子任务...' } : m
-        ))
-      },
-      onTaskCreated: (taskId, title, agentName) => {
-        createdTasks.push(`📋 **${title}** → 🤖 ${agentName}`)
-        setMessages(prev => prev.map(m =>
-          m.id === orchestrateStatusId
-            ? { ...m, content: `⚡ 编排进行中...\n\n${createdTasks.join('\n')}` }
-            : m
-        ))
-        refreshTasks()
-      },
-      onTaskProgress: (taskId, progress) => {
-        refreshTasks()
-      },
-      onDone: (taskCount, summary) => {
-        setMessages(prev => prev.map(m =>
-          m.id === orchestrateStatusId
-            ? { ...m, content: `✅ **编排完成** — ${taskCount} 个任务已执行\n\n${createdTasks.join('\n')}\n\n---\n\n${summary.slice(0, 800)}` }
-            : m
-        ))
-        setIsOrchestrating(false)
-        refreshTasks()
-      },
-      onError: (error) => {
-        setMessages(prev => prev.map(m =>
-          m.id === orchestrateStatusId
-            ? { ...m, content: `❌ 编排失败：${error}` }
-            : m
-        ))
-        setIsOrchestrating(false)
-      },
-    })
-  }
-
-  const handleSend = (text: string) => {
-    if (!convId) return
-
-    // 检测编排指令
-    if (text.startsWith('/目标 ') || text.startsWith('/goal ')) {
-      const goal = text.replace(/^\/(目标|goal)\s+/, '')
-      handleOrchestrate(goal)
-      return
+    return () => {
+      cancelled = true
     }
+  }, [idParam, reloadMessages, refreshTasks])
 
-    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  // 编排期间任务状态变化较快，额外轮询
+  useEffect(() => {
+    if (busy !== 'orchestrate') return
+    const timer = setInterval(refreshTasks, 2000)
+    return () => clearInterval(timer)
+  }, [busy, refreshTasks])
 
-    setMessages(prev => [...prev, {
-      id: `u-${Date.now()}`,
-      senderName: '创始人 · 张轩',
-      senderType: 'human',
-      senderAvatar: '张',
-      senderColor: 'bg-violet-500',
-      content: text,
-      timestamp: now,
-    }])
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    })
+  }, [items])
 
-    setIsStreaming(true)
-    streamTextRef.current = ''
+  const orchestrate = useCallback(
+    (goal: string) => {
+      if (!conv) return
+      setBusy('orchestrate')
+      const now = fmtTime(new Date())
+      const steps: PlanStep[] = []
+      setItems((prev) => [
+        ...prev,
+        { kind: 'human', id: `goal-${Date.now()}`, time: now, isGoal: true, content: goal },
+        { kind: 'note', id: LIVE_PLAN_ID, time: now, content: '正在拆解目标…' },
+      ])
 
-    setTimeout(() => {
-      setMessages(prev => [...prev, {
-        id: STREAMING_ID,
-        senderName: 'AI 助手',
-        senderType: 'agent',
-        senderAvatar: '✦',
-        senderColor: 'bg-gradient-to-br from-violet-500 to-blue-500',
-        content: '',
-        timestamp: now,
-      }])
-    }, 200)
+      startOrchestration(conv.id, goal, {
+        onTaskCreated: (taskId, title, agentName) => {
+          steps.push({ taskId, title, agentName })
+          const plan: ChatItem = { kind: 'plan', id: LIVE_PLAN_ID, time: now, steps: [...steps] }
+          setItems((prev) => prev.map((it) => (it.id === LIVE_PLAN_ID ? plan : it)))
+          refreshTasks()
+        },
+        onTaskProgress: () => refreshTasks(),
+        onDone: async () => {
+          await Promise.all([reloadMessages(conv.id), refreshTasks()])
+          setBusy(null)
+        },
+        onError: (error) => {
+          setItems((prev) =>
+            prev.map((it) => (it.id === LIVE_PLAN_ID ? { kind: 'note', id: it.id, time: now, content: `编排失败：${error}` } : it)),
+          )
+          setBusy(null)
+        },
+      })
+    },
+    [conv, refreshTasks, reloadMessages],
+  )
 
-    sendChatMessage(convId, text, '创始人 · 张轩', {
+  // 从首页带着目标过来：自动开始编排，并清掉 URL 里的 goal，避免刷新时重复执行
+  useEffect(() => {
+    if (!conv || loading || !goalParam || goalStarted.current === conv.id) return
+    goalStarted.current = conv.id
+    router.replace(`/conversation?id=${conv.id}`)
+    // 推迟到 effect 之后再更新状态，避免同步 setState 引发连锁渲染
+    queueMicrotask(() => orchestrate(goalParam))
+  }, [conv, loading, goalParam, orchestrate, router])
+
+  const chat = (text: string) => {
+    if (!conv) return
+    setBusy('chat')
+    const now = fmtTime(new Date())
+    setItems((prev) => [
+      ...prev,
+      { kind: 'human', id: `u-${Date.now()}`, time: now, content: text },
+      { kind: 'agent', id: STREAMING_ID, time: now, name: 'AI 助手', content: '' },
+    ])
+    let acc = ''
+    sendChatMessage(conv.id, text, ME.name, {
       onChunk: (chunk) => {
-        streamTextRef.current += chunk
-        const current = streamTextRef.current
-        setMessages(prev => prev.map(m => m.id === STREAMING_ID ? { ...m, content: current } : m))
+        acc += chunk
+        const current = acc
+        setItems((prev) => prev.map((it) => (it.id === STREAMING_ID && it.kind === 'agent' ? { ...it, content: current } : it)))
       },
-      onDone: (msgId, fullContent) => {
-        setMessages(prev => prev.map(m => m.id === STREAMING_ID ? { ...m, id: msgId, content: fullContent } : m))
-        setIsStreaming(false)
+      onDone: (msgId, full) => {
+        setItems((prev) =>
+          prev.map((it) => (it.id === STREAMING_ID && it.kind === 'agent' ? { ...it, id: msgId, content: full } : it)),
+        )
+        setBusy(null)
       },
       onError: (error) => {
-        const fallback = `[连接错误] ${error}\n\n请确认 XTeam Server 正常运行。`
-        setMessages(prev => prev.map(m => m.id === STREAMING_ID ? { ...m, id: `err-${Date.now()}`, content: fallback } : m))
-        setIsStreaming(false)
+        setItems((prev) =>
+          prev.map((it) =>
+            it.id === STREAMING_ID && it.kind === 'agent'
+              ? { ...it, id: `err-${Date.now()}`, content: `连接出错了：${error}。请确认 XTeam Server 正在运行。` }
+              : it,
+          ),
+        )
+        setBusy(null)
       },
     })
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
-      </div>
-    )
-  }
+  const taskMap = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks])
+  const convTasks = useMemo(() => tasks.filter((t) => t.conversation_id === conv?.id), [tasks, conv])
+  const running = convTasks.find((t) => t.status === 'running')
+  const failedCount = convTasks.filter((t) => t.status === 'failed').length
+  const agentNames = [...new Set(convTasks.map((t) => t.assignee_name).filter(Boolean) as string[])].slice(0, 4)
+
+  if (loading) return <PageSpinner />
 
   return (
-    <div className="flex h-full">
-      <div className="flex-1 flex flex-col">
-        <div className="px-6 py-4 border-b border-border/40 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold">{DEMO_CONV_TITLE}</h2>
-            <p className="text-sm text-muted-foreground">{messages.length} 条消息 · {tasks.filter(t => t.status === 'running').length} 个任务执行中</p>
-          </div>
-          {isOrchestrating && (
-            <div className="flex items-center gap-2 text-amber-500 text-sm">
-              <Zap className="h-4 w-4 animate-pulse" />
-              编排中...
-            </div>
-          )}
-        </div>
-
-        <div ref={scrollRef} className="flex-1 overflow-auto px-6 py-4 space-y-6">
-          {messages.length === 0 && !isStreaming && (
-            <div className="flex items-center justify-center h-full text-muted-foreground">
-              <div className="text-center">
-                <div className="text-3xl mb-3">💬</div>
-                <p>发送消息开始对话</p>
-                <p className="text-xs mt-2 opacity-60">输入 <code className="bg-muted px-1 rounded">/目标 你的目标</code> 启动 AI 编排</p>
-              </div>
-            </div>
-          )}
-
-          {messages.map((msg) => (
-            <MessageItem key={msg.id} message={msg} />
+    <div className="flex min-w-0 flex-1 flex-col">
+      <header className="flex items-center gap-3 border-b border-line-soft px-6 py-4">
+        <h1 className="truncate text-base font-semibold text-ink">{conv?.title}</h1>
+        {running || busy === 'orchestrate' ? (
+          <Tag tone="brand">进行中</Tag>
+        ) : convTasks.length > 0 && convTasks.every((t) => t.status === 'completed') ? (
+          <Tag tone="success">已完成</Tag>
+        ) : null}
+        <div className="flex-1" />
+        <div className="flex -space-x-1.5">
+          <MyAvatar size={28} className="ring-2 ring-white" />
+          {agentNames.map((n) => (
+            <AgentAvatar key={n} name={n} size={28} className="ring-2 ring-white" />
           ))}
+        </div>
+      </header>
 
-          {isStreaming && messages.find(m => m.id === STREAMING_ID)?.content === '' && (
-            <div className="flex items-center gap-2 ml-12 text-xs text-muted-foreground">
-              <div className="flex gap-1">
-                <span className="h-1.5 w-1.5 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="h-1.5 w-1.5 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="h-1.5 w-1.5 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 py-6">
+          {failedCount > 0 && (
+            <div className="flex items-center gap-2 rounded-lg bg-danger-soft px-3 py-2">
+              <WarningCircle size={16} weight="fill" className="text-danger" />
+              <span className="flex-1 text-sm font-medium text-ink">{failedCount} 个任务失败了</span>
+              <Link href="/tasks" className="text-sm text-danger-text hover:underline">
+                去看看 →
+              </Link>
+            </div>
+          )}
+
+          {items.length === 0 ? (
+            <EmptyState />
+          ) : (
+            items.map((it) => <MessageItem key={it.id} item={it} tasks={taskMap} />)
+          )}
+
+          {running && (
+            <div className="flex items-center gap-3">
+              <AgentAvatar name={running.assignee_name ?? ''} />
+              <div className="flex items-center gap-2 rounded-full bg-fill px-3 py-1.5 text-xs">
+                <CircleNotch size={12} className="animate-spin text-brand" />
+                <span className="text-ink">{shortAgentName(running.assignee_name ?? 'Agent')}正在处理「{running.title}」</span>
               </div>
-              AI 助手正在回复...
             </div>
           )}
         </div>
-
-        <ChatInput onSend={handleSend} disabled={isStreaming || isOrchestrating || !convId} />
       </div>
 
-      <ContextPanel
-        tasks={tasks.slice(0, 10).map(t => ({
-          title: t.title,
-          status: t.status,
-          progress: t.progress,
-          agentName: t.assignee_name || undefined,
-        }))}
-        agents={agents.filter(a => a.status === 'online').map(a => ({ name: a.name, status: '在线', color: `bg-[${a.color}]` }))}
-        goals={['提升内容增长效率', '稳定爆款率']}
-        memories={['用户偏好偏向高信息密度内容', '测评型内容在晚间转化更高']}
-        decisions={[]}
-      />
+      <div className="mx-auto w-full max-w-3xl px-6 pb-4">
+        <Composer
+          disabled={!conv || busy !== null}
+          onSubmit={(text, isGoal) => (isGoal ? orchestrate(text) : chat(text))}
+        />
+      </div>
+    </div>
+  )
+}
+
+function EmptyState() {
+  return (
+    <div className="flex flex-col items-center gap-3 py-24 text-center">
+      <NextImage src="/orb.png" alt="" width={72} height={72} className="rounded-[18px]" />
+      <p className="text-base font-medium text-ink">说说你的目标，我来拆解任务</p>
+      <p className="text-sm text-ink-3">打开「自动编排」，AI 会拆成任务并分配给合适的 Agent</p>
+    </div>
+  )
+}
+
+function PageSpinner() {
+  return (
+    <div className="flex flex-1 items-center justify-center">
+      <CircleNotch size={24} className="animate-spin text-brand" />
     </div>
   )
 }

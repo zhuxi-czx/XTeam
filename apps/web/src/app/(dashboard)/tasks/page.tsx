@@ -1,112 +1,102 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Plus, Loader2, CheckCircle, Clock, AlertCircle, PlayCircle } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { CircleNotch } from '@phosphor-icons/react'
+import { cn } from '@/lib/utils'
+import { shortAgentName } from '@/lib/agent-style'
+import { AgentAvatar } from '@/components/xt/primitives'
 import { tasksApi, type Task } from '@/lib/api'
 
-const columns = [
-  { key: 'queued', label: '队列中', icon: Clock, color: 'text-gray-400', bg: 'bg-gray-500/10' },
-  { key: 'running', label: '执行中', icon: PlayCircle, color: 'text-blue-500', bg: 'bg-blue-500/10' },
-  { key: 'completed', label: '已完成', icon: CheckCircle, color: 'text-green-500', bg: 'bg-green-500/10' },
-  { key: 'failed', label: '失败', icon: AlertCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
-]
+const COLUMNS = [
+  { key: 'queued', label: '排队中', dot: 'bg-ink-3', lane: 'bg-fill-2' },
+  { key: 'running', label: '执行中', dot: 'bg-brand', lane: 'bg-gradient-to-b from-brand-soft to-fill-2 to-40%' },
+  { key: 'completed', label: '已完成 🎉', dot: 'bg-success', lane: 'bg-fill-2' },
+  { key: 'failed', label: '失败', dot: 'bg-danger', lane: 'bg-gradient-to-b from-danger-soft to-fill-2 to-40%' },
+] as const
 
 export default function TasksPage() {
-  const [tasks, setTasks] = useState<Task[]>([])
-  const [loading, setLoading] = useState(true)
+  const [tasks, setTasks] = useState<Task[] | null>(null)
 
   useEffect(() => {
-    tasksApi.list().then((data) => {
-      setTasks(data)
-      setLoading(false)
-    }).catch(() => setLoading(false))
+    const load = () => tasksApi.list().then(setTasks).catch(() => setTasks((t) => t ?? []))
+    load()
+    // 执行中的任务会持续变化，定时刷新
+    const timer = setInterval(load, 5000)
+    return () => clearInterval(timer)
   }, [])
 
-  if (loading) {
+  if (!tasks) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
+      <div className="flex flex-1 items-center justify-center">
+        <CircleNotch size={24} className="animate-spin text-brand" />
       </div>
     )
   }
 
+  const running = tasks.filter((t) => t.status === 'running').length
+
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-6 py-4 border-b border-border/40 flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold">任务看板</h2>
-          <p className="text-sm text-muted-foreground">{tasks.length} 个任务</p>
-        </div>
-        <Button size="sm" className="gap-1.5 bg-violet-600 hover:bg-violet-700">
-          <Plus className="h-3.5 w-3.5" /> 创建任务
-        </Button>
-      </div>
+    <div className="flex min-w-0 flex-1 flex-col">
+      <header className="flex items-baseline gap-3 px-6 pb-4 pt-5">
+        <h1 className="text-2xl font-semibold text-ink">任务</h1>
+        <span className="text-sm text-ink-3">
+          {tasks.length} 个{running > 0 && ` · ${running} 个执行中`}
+        </span>
+      </header>
 
-      <div className="flex-1 overflow-auto p-6">
-        <div className="grid grid-cols-4 gap-4 h-full">
-          {columns.map((col) => {
-            const colTasks = tasks.filter(t => t.status === col.key)
-            const Icon = col.icon
-            return (
-              <div key={col.key} className="flex flex-col">
-                {/* Column header */}
-                <div className="flex items-center gap-2 mb-3 px-1">
-                  <Icon className={`h-4 w-4 ${col.color}`} />
-                  <span className="text-sm font-semibold">{col.label}</span>
-                  <span className="text-xs text-muted-foreground ml-auto">{colTasks.length}</span>
-                </div>
-
-                {/* Cards */}
-                <div className="flex-1 space-y-2 min-h-[200px]">
-                  {colTasks.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-border/40 p-6 text-center">
-                      <p className="text-xs text-muted-foreground">暂无任务</p>
-                    </div>
-                  )}
-                  {colTasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className="rounded-xl border border-border/60 bg-card p-4 hover:border-violet-500/30 transition-colors cursor-pointer"
-                    >
-                      <h4 className="text-sm font-semibold mb-1">{task.title}</h4>
-                      {task.description && (
-                        <p className="text-xs text-muted-foreground mb-2 line-clamp-2">{task.description}</p>
-                      )}
-                      {task.assignee_name && (
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2">
-                          <span>🤖</span>
-                          <span>{task.assignee_name}</span>
-                        </div>
-                      )}
-                      {task.status === 'running' && (
-                        <div>
-                          <div className="flex items-center justify-between text-xs mb-1">
-                            <span className="text-muted-foreground">进度</span>
-                            <span className="font-medium">{task.progress}%</span>
-                          </div>
-                          <div className="h-1.5 rounded-full bg-accent overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-violet-500 transition-all duration-500"
-                              style={{ width: `${task.progress}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
-                      {task.result && task.status === 'completed' && (
-                        <p className="text-xs text-green-400 mt-2 line-clamp-2">{task.result}</p>
-                      )}
-                      <div className="text-[10px] text-muted-foreground mt-2">
-                        {new Date(task.created_at + 'Z').toLocaleString('zh-CN')}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+      <div className="grid min-h-0 flex-1 grid-cols-4 gap-3 px-6 pb-6">
+        {COLUMNS.map((col) => {
+          const list = tasks.filter((t) => t.status === col.key)
+          return (
+            <section key={col.key} className={cn('flex min-h-0 flex-col gap-2 rounded-xl p-2', col.lane)}>
+              <div className="flex items-center gap-2 px-2 py-1">
+                <span className={cn('size-2 rounded-full', col.dot)} />
+                <span className="text-sm font-semibold text-ink">{col.label}</span>
+                <span className="text-xs text-ink-3">{list.length}</span>
               </div>
-            )
-          })}
-        </div>
+              <div className="flex flex-col gap-2 overflow-y-auto">
+                {list.length === 0 ? (
+                  <p className="px-2 py-6 text-center text-xs text-ink-3">空空如也</p>
+                ) : (
+                  list.map((t) => <TaskCard key={t.id} task={t} />)
+                )}
+              </div>
+            </section>
+          )
+        })}
       </div>
     </div>
   )
+}
+
+function TaskCard({ task }: { task: Task }) {
+  const running = task.status === 'running'
+  const failed = task.status === 'failed'
+  const card = (
+    <div
+      className={cn(
+        'flex flex-col gap-3 rounded-lg border bg-surface p-3.5 transition-colors',
+        running ? 'border-brand-line' : failed ? 'border-danger-line' : 'border-transparent hover:border-line',
+      )}
+    >
+      <p className="line-clamp-2 text-sm font-semibold text-ink">{task.title}</p>
+      {running && (
+        <div className="flex items-center gap-2">
+          <div className="h-1 flex-1 overflow-hidden rounded-full bg-fill-2">
+            <div className="h-full rounded-full bg-brand transition-all" style={{ width: `${task.progress}%` }} />
+          </div>
+          <span className="text-xs tabular-nums text-ink-2">{task.progress}%</span>
+        </div>
+      )}
+      {failed && task.result && <p className="line-clamp-2 rounded-md bg-danger-soft px-2.5 py-1.5 text-xs text-danger-text">{task.result}</p>}
+      {task.assignee_name && (
+        <div className="flex items-center gap-2">
+          <AgentAvatar name={task.assignee_name} size={20} />
+          <span className="truncate text-xs text-ink-2">{shortAgentName(task.assignee_name)}</span>
+        </div>
+      )}
+    </div>
+  )
+  return task.conversation_id ? <Link href={`/conversation?id=${task.conversation_id}`}>{card}</Link> : card
 }

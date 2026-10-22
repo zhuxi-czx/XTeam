@@ -1,170 +1,105 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Plus, Settings, Zap, MessageSquare, Search, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { agentsApi, type Agent } from '@/lib/api'
+import { useEffect, useState } from 'react'
+import { CircleNotch } from '@phosphor-icons/react'
+import { cn } from '@/lib/utils'
+import { shortAgentName } from '@/lib/agent-style'
+import { AgentAvatar, Tag } from '@/components/xt/primitives'
+import { agentsApi, tasksApi, type Agent } from '@/lib/api'
 
-const statusMap = {
-  online: { label: '在线', dot: 'bg-green-500' },
-  busy: { label: '忙碌', dot: 'bg-amber-500' },
-  offline: { label: '离线', dot: 'bg-gray-500' },
+type State = 'working' | 'idle' | 'offline'
+
+const STATE: Record<State, { label: string; tone: 'brand' | 'success' | 'neutral' }> = {
+  working: { label: '工作中', tone: 'brand' },
+  idle: { label: '空闲', tone: 'success' },
+  offline: { label: '离线', tone: 'neutral' },
 }
 
+const FILTERS: { key: State | 'all'; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'working', label: '工作中' },
+  { key: 'idle', label: '空闲' },
+  { key: 'offline', label: '离线' },
+]
+
 export default function AgentsPage() {
-  const [agents, setAgents] = useState<Agent[]>([])
-  const [loading, setLoading] = useState(true)
-  const [selected, setSelected] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
+  const [agents, setAgents] = useState<Agent[] | null>(null)
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
+  const [filter, setFilter] = useState<State | 'all'>('all')
 
   useEffect(() => {
-    agentsApi.list().then((data) => {
-      setAgents(data)
-      setLoading(false)
-    }).catch(() => setLoading(false))
+    agentsApi.list().then(setAgents).catch(() => setAgents([]))
+    // agents.status 不会随执行更新，“工作中”以是否有执行中的任务为准
+    tasksApi
+      .list('running')
+      .then((ts) => setBusyIds(new Set(ts.map((t) => t.assignee_id).filter(Boolean) as string[])))
+      .catch(() => {})
   }, [])
 
-  const selectedAgent = agents.find((a) => a.id === selected)
-  const filtered = agents.filter(
-    (a) => a.name.includes(searchQuery) || a.description?.includes(searchQuery)
-  )
-
-  if (loading) {
+  if (!agents) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
+      <div className="flex flex-1 items-center justify-center">
+        <CircleNotch size={24} className="animate-spin text-brand" />
       </div>
     )
   }
 
+  const stateOf = (a: Agent): State => (a.status === 'offline' ? 'offline' : busyIds.has(a.id) || a.status === 'busy' ? 'working' : 'idle')
+  const count = (k: State | 'all') => (k === 'all' ? agents.length : agents.filter((a) => stateOf(a) === k).length)
+  const shown = filter === 'all' ? agents : agents.filter((a) => stateOf(a) === filter)
+
   return (
-    <div className="flex h-full">
-      {/* Agent 列表 */}
-      <div className="w-80 border-r border-border/40 flex flex-col">
-        <div className="px-4 py-3 border-b border-border/40">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold">Agent 列表 ({agents.length})</h2>
-            <Button size="sm" variant="outline" className="h-7 gap-1 text-xs">
-              <Plus className="h-3 w-3" /> 添加
-            </Button>
-          </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="搜索 Agent..."
-              className="w-full rounded-lg border border-border/60 bg-accent/20 pl-9 pr-3 py-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-violet-500/30"
-            />
-          </div>
+    <div className="flex min-w-0 flex-1 flex-col">
+      <header className="flex items-center gap-4 px-6 pb-4 pt-5">
+        <h1 className="text-2xl font-semibold text-ink">Agent</h1>
+        <div className="flex gap-0.5 rounded-lg bg-fill-2 p-0.5">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => setFilter(f.key)}
+              className={cn(
+                'h-7 rounded-md px-3 text-xs transition-colors',
+                filter === f.key ? 'bg-surface font-medium text-ink' : 'text-ink-2 hover:text-ink',
+              )}
+            >
+              {f.label} {count(f.key)}
+            </button>
+          ))}
         </div>
-        <div className="flex-1 overflow-auto p-2 space-y-1">
-          {filtered.map((agent) => {
-            const status = statusMap[agent.status] || statusMap.offline
-            return (
-              <div
-                key={agent.id}
-                onClick={() => setSelected(agent.id)}
-                className={`flex items-center gap-3 rounded-lg px-3 py-3 cursor-pointer transition-colors ${
-                  selected === agent.id
-                    ? 'bg-violet-500/10 border border-violet-500/20'
-                    : 'hover:bg-accent/50 border border-transparent'
-                }`}
-              >
-                <div className="h-10 w-10 rounded-full flex items-center justify-center text-lg flex-shrink-0" style={{ backgroundColor: agent.color + '30' }}>
-                  {agent.avatar}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium truncate">{agent.name}</span>
-                    <span className={`h-2 w-2 rounded-full ${status.dot} flex-shrink-0`} />
-                  </div>
-                  <div className="text-xs text-muted-foreground truncate">{agent.model}</div>
-                </div>
-              </div>
-            )
-          })}
-        </div>
+      </header>
+
+      <div className="flex-1 overflow-y-auto px-6 pb-6">
+        {shown.length === 0 ? (
+          <p className="py-24 text-center text-sm text-ink-3">这里还没有 Agent</p>
+        ) : (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+            {shown.map((a) => (
+              <AgentCard key={a.id} agent={a} state={stateOf(a)} />
+            ))}
+          </div>
+        )}
       </div>
+    </div>
+  )
+}
 
-      {/* Agent 详情 */}
-      {selectedAgent ? (
-        <div className="flex-1 overflow-auto p-6">
-          <div className="max-w-2xl mx-auto space-y-8">
-            <div className="flex items-start gap-4">
-              <div className="h-16 w-16 rounded-2xl flex items-center justify-center text-2xl" style={{ backgroundColor: selectedAgent.color + '30' }}>
-                {selectedAgent.avatar}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-1">
-                  <h2 className="text-xl font-semibold">{selectedAgent.name}</h2>
-                  <span className={`h-2.5 w-2.5 rounded-full ${(statusMap[selectedAgent.status] || statusMap.offline).dot}`} />
-                  <span className="text-sm text-muted-foreground">{(statusMap[selectedAgent.status] || statusMap.offline).label}</span>
-                </div>
-                <p className="text-sm text-muted-foreground">{selectedAgent.description}</p>
-              </div>
-              <Button variant="outline" size="sm" className="gap-1.5">
-                <Settings className="h-3.5 w-3.5" /> 设置
-              </Button>
-            </div>
-
-            <div className="grid grid-cols-3 gap-4">
-              <div className="rounded-xl border border-border/40 p-4">
-                <div className="text-xs text-muted-foreground mb-1">已完成任务</div>
-                <div className="text-2xl font-semibold">{selectedAgent.tasks_completed}</div>
-              </div>
-              <div className="rounded-xl border border-border/40 p-4">
-                <div className="text-xs text-muted-foreground mb-1">供应商</div>
-                <div className="text-lg font-semibold">{selectedAgent.provider}</div>
-              </div>
-              <div className="rounded-xl border border-border/40 p-4">
-                <div className="text-xs text-muted-foreground mb-1">模型</div>
-                <div className="text-lg font-semibold truncate">{selectedAgent.model}</div>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-sm font-semibold mb-3">能力标签</h3>
-              <div className="flex flex-wrap gap-2">
-                {selectedAgent.capabilities.map((cap) => (
-                  <span key={cap} className="rounded-full bg-violet-500/10 border border-violet-500/20 px-3 py-1 text-xs text-violet-400">
-                    {cap}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-sm font-semibold mb-3">快捷操作</h3>
-              <div className="grid grid-cols-2 gap-3">
-                <button className="flex items-center gap-3 rounded-xl border border-border/40 p-4 hover:bg-accent/50 transition-colors text-left">
-                  <MessageSquare className="h-5 w-5 text-violet-400" />
-                  <div>
-                    <div className="text-sm font-medium">发起对话</div>
-                    <div className="text-xs text-muted-foreground">直接与 Agent 对话</div>
-                  </div>
-                </button>
-                <button className="flex items-center gap-3 rounded-xl border border-border/40 p-4 hover:bg-accent/50 transition-colors text-left">
-                  <Zap className="h-5 w-5 text-amber-400" />
-                  <div>
-                    <div className="text-sm font-medium">分配任务</div>
-                    <div className="text-xs text-muted-foreground">创建并分配新任务</div>
-                  </div>
-                </button>
-              </div>
-            </div>
-          </div>
+function AgentCard({ agent, state }: { agent: Agent; state: State }) {
+  const s = STATE[state]
+  return (
+    <div className="flex flex-col gap-3 rounded-xl bg-fill p-5">
+      <div className="flex items-center gap-3">
+        <AgentAvatar name={agent.name} size={40} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-base font-semibold text-ink">{shortAgentName(agent.name)}</div>
+          <div className="truncate text-xs text-ink-3">{agent.model}</div>
         </div>
-      ) : (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <div className="text-4xl mb-4 opacity-40">🤖</div>
-            <p className="text-muted-foreground">选择一个 Agent 查看详情</p>
-            <p className="text-xs text-muted-foreground mt-1">从左侧列表中选择或创建新 Agent</p>
-          </div>
-        </div>
-      )}
+        <Tag tone={s.tone}>{s.label}</Tag>
+      </div>
+      <p className="line-clamp-1 text-sm text-ink-2">{agent.description}</p>
+      <div className="text-xs text-ink-3">
+        已完成 <span className="text-sm font-semibold tabular-nums text-ink">{agent.tasks_completed}</span> 个任务
+      </div>
     </div>
   )
 }
