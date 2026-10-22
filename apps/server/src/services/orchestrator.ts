@@ -99,13 +99,14 @@ export function createTask(params: {
   description?: string;
   assigneeId?: string;
   assigneeName?: string;
+  goalId?: string;
 }): string {
   const db = getDb();
   const id = nanoid(12);
 
   db.prepare(`
-    INSERT INTO tasks (id, conversation_id, title, description, assignee_id, assignee_name)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO tasks (id, conversation_id, title, description, assignee_id, assignee_name, goal_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     params.conversationId ?? null,
@@ -113,6 +114,7 @@ export function createTask(params: {
     params.description ?? null,
     params.assigneeId ?? null,
     params.assigneeName ?? null,
+    params.goalId ?? null,
   );
 
   return id;
@@ -182,6 +184,8 @@ export async function executeTask(
 export async function orchestrate(params: {
   conversationId: string;
   userGoal: string;
+  /** 关联的目标：拆出的任务会写入 goal_id，用于目标进度统计 */
+  goalId?: string;
   plannerConfig: LLMConfig;
   onTaskCreated: (taskId: string, title: string, agentName: string) => void | Promise<void>;
   onTaskProgress: (taskId: string, progress: number, chunk: string) => void | Promise<void>;
@@ -214,6 +218,7 @@ export async function orchestrate(params: {
       description: plan.description,
       assigneeId: agent.id,
       assigneeName: agent.name,
+      goalId: params.goalId,
     });
 
     taskEntries.push({ taskId, plan, agent });

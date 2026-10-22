@@ -6,8 +6,9 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { WarningCircle, FileText } from '@phosphor-icons/react'
 import { Composer } from '@/components/xt/composer'
+import { GoalPicker } from '@/components/goals/goal-picker'
 import { btn, ME } from '@/components/xt/primitives'
-import { conversationsApi, tasksApi, type Task } from '@/lib/api'
+import { conversationsApi, goalsApi, tasksApi, type Goal, type Task } from '@/lib/api'
 
 const SUGGESTIONS = ['📊 复盘上周的内容数据', '💡 策划下周 5 篇选题', '🔍 盯一下竞品这周的动作']
 
@@ -25,9 +26,12 @@ export default function HomePage() {
   const [draft, setDraft] = useState('')
   const [tasks, setTasks] = useState<Task[] | null>(null)
   const [starting, setStarting] = useState(false)
+  const [goals, setGoals] = useState<Goal[]>([])
+  const [goalId, setGoalId] = useState<string | null>(null)
 
   useEffect(() => {
     tasksApi.list().then(setTasks).catch(() => setTasks([]))
+    goalsApi.list().then(setGoals).catch(() => {})
   }, [])
 
   const failed = tasks?.filter((t) => t.status === 'failed') ?? []
@@ -39,7 +43,8 @@ export default function HomePage() {
     try {
       const title = goal.replace(/^\p{Extended_Pictographic}\s*/u, '').slice(0, 24)
       const { id } = await conversationsApi.create({ title, creatorName: ME.name })
-      router.push(`/conversation?id=${id}&goal=${encodeURIComponent(goal)}`)
+      const goalParam = goalId ? `&goalId=${goalId}` : ''
+      router.push(`/conversation?id=${id}&goal=${encodeURIComponent(goal)}${goalParam}`)
     } catch {
       setStarting(false)
     }
@@ -79,6 +84,7 @@ export default function HomePage() {
             onValueChange={setDraft}
             disabled={starting}
             onSubmit={(text) => startGoal(text)}
+            toolbarExtra={<GoalPicker goals={goals} value={goalId} onChange={setGoalId} />}
           />
 
           <div className="flex flex-wrap gap-2">

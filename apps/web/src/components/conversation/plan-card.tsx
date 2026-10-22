@@ -56,7 +56,7 @@ export function PlanCard({ steps, tasks }: { steps: PlanStep[]; tasks: Map<strin
   )
 }
 
-function StepMarker({ index, status }: { index: number; status: string }) {
+export function StepMarker({ index, status }: { index: number; status: string }) {
   if (status === 'completed') {
     return (
       <span className="flex size-[22px] items-center justify-center rounded-full bg-success text-white">

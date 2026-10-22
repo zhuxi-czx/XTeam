@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import NextImage from 'next/image'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { CircleNotch, WarningCircle } from '@phosphor-icons/react'
+import { CaretRight, CircleNotch, Target, WarningCircle } from '@phosphor-icons/react'
 import { MessageItem, type ChatItem } from '@/components/conversation/message-item'
 import type { PlanStep } from '@/components/conversation/plan-card'
 import { Composer } from '@/components/xt/composer'
@@ -14,8 +14,10 @@ import {
   conversationsApi,
   sendChatMessage,
   startOrchestration,
+  goalsApi,
   tasksApi,
   type Conversation,
+  type Goal,
   type Message,
   type Task,
 } from '@/lib/api'
@@ -57,7 +59,12 @@ function toChatItems(messages: Message[]): ChatItem[] {
           return match ? { title: match[1], body: match[2].trim() } : { title: '结果', body: chunk.trim() }
         })
         .filter((s) => s.body)
-      items.push({ kind: 'summary', id: m.id, time, sections })
+      // 旧数据里可能存在空汇总（规划失败），按说明显示，避免出现“全部完成”却没有内容
+      items.push(
+        sections.length > 0
+          ? { kind: 'summary', id: m.id, time, sections }
+          : { kind: 'note', id: m.id, time, content: '这次没能拆出任务，可能是模型服务出错了，稍后再试一次。' },
+      )
     } else {
       items.push({ kind: 'note', id: m.id, time, content: m.content })
     }
@@ -86,10 +93,12 @@ function ConversationView() {
   const params = useSearchParams()
   const idParam = params.get('id')
   const goalParam = params.get('goal')
+  const goalIdParam = params.get('goalId')
 
   const [conv, setConv] = useState<Conversation | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
+  const [goals, setGoals] = useState<Goal[]>([])
   const [busy, setBusy] = useState<'chat' | 'orchestrate' | null>(null)
   const [loading, setLoading] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -121,7 +130,7 @@ function ConversationView() {
         }
         if (cancelled || !target) return
         setConv(target)
-        await Promise.all([reloadMessages(target.id), refreshTasks()])
+        await Promise.all([reloadMessages(target.id), refreshTasks(), goalsApi.list().then(setGoals).catch(() => {})])
       } catch (err) {
         console.error('加载对话失败', err)
       }
@@ -147,7 +156,7 @@ function ConversationView() {
   }, [items])
 
   const orchestrate = useCallback(
-    (goal: string) => {
+    (goal: string, goalId?: string) => {
       if (!conv) return
       setBusy('orchestrate')
       const now = fmtTime(new Date())
@@ -176,7 +185,7 @@ function ConversationView() {
           )
           setBusy(null)
         },
-      })
+      }, goalId)
     },
     [conv, refreshTasks, reloadMessages],
   )
@@ -187,8 +196,8 @@ function ConversationView() {
     goalStarted.current = conv.id
     router.replace(`/conversation?id=${conv.id}`)
     // 推迟到 effect 之后再更新状态，避免同步 setState 引发连锁渲染
-    queueMicrotask(() => orchestrate(goalParam))
-  }, [conv, loading, goalParam, orchestrate, router])
+    queueMicrotask(() => orchestrate(goalParam, goalIdParam ?? undefined))
+  }, [conv, loading, goalParam, goalIdParam, orchestrate, router])
 
   const chat = (text: string) => {
     if (!conv) return
@@ -229,6 +238,8 @@ function ConversationView() {
   const convTasks = useMemo(() => tasks.filter((t) => t.conversation_id === conv?.id), [tasks, conv])
   const running = convTasks.find((t) => t.status === 'running')
   const failedCount = convTasks.filter((t) => t.status === 'failed').length
+  // 对话所属目标：取它的任务关联的目标；之后在这里继续编排也挂到同一个目标
+  const convGoal = goals.find((g) => convTasks.some((t) => t.goal_id === g.id))
   const agentNames = [...new Set(convTasks.map((t) => t.assignee_name).filter(Boolean) as string[])].slice(0, 4)
 
   if (loading) return <PageSpinner />
@@ -242,6 +253,16 @@ function ConversationView() {
         ) : convTasks.length > 0 && convTasks.every((t) => t.status === 'completed') ? (
           <Tag tone="success">已完成</Tag>
         ) : null}
+        {convGoal && (
+          <Link
+            href={`/goals?open=${convGoal.id}`}
+            className="inline-flex h-6 min-w-0 max-w-[280px] items-center gap-1 rounded-full bg-fill-2 px-2 text-xs text-ink-2 transition-colors hover:bg-brand-soft hover:text-brand-text"
+          >
+            <Target size={12} className="shrink-0 text-brand" />
+            <span className="truncate">{convGoal.title}</span>
+            <CaretRight size={10} className="shrink-0 text-ink-3" />
+          </Link>
+        )}
         <div className="flex-1" />
         <div className="flex -space-x-1.5">
           <MyAvatar size={28} className="ring-2 ring-white" />
@@ -284,7 +305,7 @@ function ConversationView() {
       <div className="mx-auto w-full max-w-3xl px-6 pb-4">
         <Composer
           disabled={!conv || busy !== null}
-          onSubmit={(text, isGoal) => (isGoal ? orchestrate(text) : chat(text))}
+          onSubmit={(text, isGoal) => (isGoal ? orchestrate(text, convGoal?.id) : chat(text))}
         />
       </div>
     </div>

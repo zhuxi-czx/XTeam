@@ -3,9 +3,9 @@
 import { Suspense, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { House, ChatsCircle, CheckSquare, Robot, Plus, type Icon } from '@phosphor-icons/react'
+import { House, ChatsCircle, CheckSquare, Target, Robot, Plus, type Icon } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
-import { agentsApi, conversationsApi, tasksApi, type Conversation } from '@/lib/api'
+import { agentsApi, conversationsApi, goalsApi, tasksApi, type Conversation } from '@/lib/api'
 import { MyAvatar, ME } from '@/components/xt/primitives'
 
 interface NavItem {
@@ -20,17 +20,20 @@ export function Sidebar() {
   const [convs, setConvs] = useState<Conversation[]>([])
   const [runningTasks, setRunningTasks] = useState(0)
   const [agentCount, setAgentCount] = useState(0)
+  const [activeGoals, setActiveGoals] = useState(0)
 
   useEffect(() => {
     conversationsApi.list().then(setConvs).catch(() => {})
     tasksApi.list('running').then((t) => setRunningTasks(t.length)).catch(() => {})
     agentsApi.list().then((a) => setAgentCount(a.length)).catch(() => {})
+    goalsApi.list().then((g) => setActiveGoals(g.filter((x) => x.status === 'active').length)).catch(() => {})
   }, [pathname])
 
   const nav: NavItem[] = [
     { href: '/', label: '工作台', icon: House },
     { href: '/conversation', label: '对话', icon: ChatsCircle },
     { href: '/tasks', label: '任务', icon: CheckSquare, count: runningTasks || undefined },
+    { href: '/goals', label: '目标', icon: Target, count: activeGoals || undefined },
     { href: '/agents', label: 'Agent', icon: Robot, count: agentCount || undefined },
   ]
 

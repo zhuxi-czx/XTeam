@@ -14,6 +14,8 @@ interface ComposerProps {
   onValueChange?: (v: string) => void
   minRows?: number
   className?: string
+  /** 放在“自动编排”右侧的额外控件，例如关联目标 */
+  toolbarExtra?: React.ReactNode
 }
 
 export function Composer({
@@ -25,6 +27,7 @@ export function Composer({
   onValueChange,
   minRows = 1,
   className,
+  toolbarExtra,
 }: ComposerProps) {
   const [inner, setInner] = useState('')
   const [orchestrate, setOrchestrate] = useState(defaultOrchestrate || lockOrchestrate)
@@ -89,6 +92,7 @@ export function Composer({
           <TreeStructure size={14} weight={orchestrate ? 'fill' : 'regular'} />
           自动编排
         </button>
+        {toolbarExtra}
         <div className="flex-1" />
         <button
           type="button"

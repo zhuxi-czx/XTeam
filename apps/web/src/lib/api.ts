@@ -63,6 +63,20 @@ export interface Task {
   updated_at: string;
 }
 
+export interface Goal {
+  id: string;
+  title: string;
+  description: string | null;
+  /** achieved 由后端按关联任务实时算出；paused 为手动设置 */
+  status: 'active' | 'achieved' | 'paused';
+  progress: number;
+  task_total: number;
+  task_done: number;
+  conversation_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 // ── Fetcher ──
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -131,6 +145,23 @@ export const tasksApi = {
     method: 'PATCH',
     body: JSON.stringify(data),
   }),
+};
+
+// ── Goals ──
+
+export const goalsApi = {
+  list: () => apiFetch<Goal[]>('/api/goals'),
+  get: (id: string) => apiFetch<Goal & { tasks: Task[] }>(`/api/goals/${id}`),
+  create: (data: { title: string; description?: string }) => apiFetch<{ id: string }>('/api/goals', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  update: (id: string, data: { title?: string; description?: string | null; status?: 'active' | 'paused' }) =>
+    apiFetch<{ ok: boolean }>(`/api/goals/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  delete: (id: string) => apiFetch<{ ok: boolean }>(`/api/goals/${id}`, { method: 'DELETE' }),
 };
 
 // ── Chat (SSE Streaming) ──
@@ -219,13 +250,14 @@ export function startOrchestration(
   conversationId: string,
   goal: string,
   callbacks: OrchestrateCallbacks,
+  goalId?: string,
 ): AbortController {
   const controller = new AbortController();
 
   fetch(`${API_BASE}/api/orchestrate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversationId, goal }),
+    body: JSON.stringify({ conversationId, goal, goalId }),
     signal: controller.signal,
   }).then(async (res) => {
     if (!res.ok) {
