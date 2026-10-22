@@ -222,14 +222,14 @@ export function startOrchestration(
 ): AbortController {
   const controller = new AbortController();
 
-  fetch(\`\${API_BASE}/api/orchestrate\`, {
+  fetch(`${API_BASE}/api/orchestrate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ conversationId, goal }),
     signal: controller.signal,
   }).then(async (res) => {
     if (!res.ok) {
-      callbacks.onError?.(\`HTTP \${res.status}\`);
+      callbacks.onError?.(`HTTP ${res.status}`);
       return;
     }
 

@@ -4,8 +4,8 @@
   "private": true,
   "description": "Human-Agent Collaborative Platform",
   "scripts": {
-    "dev": "pnpm --filter @xteam/web dev",
-    "build": "pnpm --filter @xteam/web build",
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
     "dev:all": "pnpm -r dev"
   }
 }
