@@ -90,4 +90,23 @@ conversations.post('/:id/messages', async (c) => {
   return c.json({ id }, 201);
 });
 
+// PUT /conversations/:id/goal — 把对话里的全部任务关联到目标（goalId 为 null 时取消关联）
+conversations.put('/:id/goal', async (c) => {
+  const { goalId } = await c.req.json<{ goalId: string | null }>();
+  const db = getDb();
+  const convId = c.req.param('id');
+
+  if (!db.prepare('SELECT 1 FROM conversations WHERE id = ?').get(convId)) {
+    return c.json({ error: 'conversation not found' }, 404);
+  }
+  if (goalId !== null && !db.prepare('SELECT 1 FROM goals WHERE id = ?').get(goalId)) {
+    return c.json({ error: 'goal not found' }, 404);
+  }
+
+  const { changes } = db
+    .prepare("UPDATE tasks SET goal_id = ?, updated_at = datetime('now') WHERE conversation_id = ?")
+    .run(goalId, convId);
+  return c.json({ ok: true, tasks: changes });
+});
+
 export { conversations };

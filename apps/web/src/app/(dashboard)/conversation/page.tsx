@@ -4,10 +4,11 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import NextImage from 'next/image'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { CaretRight, CircleNotch, Target, WarningCircle } from '@phosphor-icons/react'
+import { CircleNotch, WarningCircle } from '@phosphor-icons/react'
 import { MessageItem, type ChatItem } from '@/components/conversation/message-item'
 import type { PlanStep } from '@/components/conversation/plan-card'
 import { Composer } from '@/components/xt/composer'
+import { GoalPicker } from '@/components/goals/goal-picker'
 import { AgentAvatar, MyAvatar, Tag, ME } from '@/components/xt/primitives'
 import { shortAgentName } from '@/lib/agent-style'
 import {
@@ -253,15 +254,18 @@ function ConversationView() {
         ) : convTasks.length > 0 && convTasks.every((t) => t.status === 'completed') ? (
           <Tag tone="success">已完成</Tag>
         ) : null}
-        {convGoal && (
-          <Link
-            href={`/goals?open=${convGoal.id}`}
-            className="inline-flex h-6 min-w-0 max-w-[280px] items-center gap-1 rounded-full bg-fill-2 px-2 text-xs text-ink-2 transition-colors hover:bg-brand-soft hover:text-brand-text"
-          >
-            <Target size={12} className="shrink-0 text-brand" />
-            <span className="truncate">{convGoal.title}</span>
-            <CaretRight size={10} className="shrink-0 text-ink-3" />
-          </Link>
+        {/* 有任务的对话才能关联目标：关联的单位是对话里的全部任务 */}
+        {convTasks.length > 0 && conv && (
+          <GoalPicker
+            variant="pill"
+            goals={goals}
+            value={convGoal?.id ?? null}
+            viewHref={convGoal ? `/goals?open=${convGoal.id}` : undefined}
+            onChange={async (goalId) => {
+              await conversationsApi.setGoal(conv.id, goalId).catch(() => {})
+              await Promise.all([refreshTasks(), goalsApi.list().then(setGoals).catch(() => {})])
+            }}
+          />
         )}
         <div className="flex-1" />
         <div className="flex -space-x-1.5">

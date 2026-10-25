@@ -130,6 +130,11 @@ export const conversationsApi = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
+  /** 把对话里的全部任务关联到目标；goalId 为 null 时取消关联 */
+  setGoal: (id: string, goalId: string | null) => apiFetch<{ ok: boolean; tasks: number }>(`/api/conversations/${id}/goal`, {
+    method: 'PUT',
+    body: JSON.stringify({ goalId }),
+  }),
 };
 
 // ── Tasks ──

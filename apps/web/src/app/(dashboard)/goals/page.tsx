@@ -175,13 +175,16 @@ function GoalTasks({ goal }: { goal: Goal }) {
   return (
     <>
       {tasks.length === 0 ? (
-        <p className="px-5 py-4 text-sm text-ink-3">还没有关联任务。在工作台发起编排时选择这个目标，拆出的任务会出现在这里。</p>
+        <p className="px-5 py-4 text-sm text-ink-3">
+          还没有关联任务。在工作台发起编排时选择这个目标，或在对话页顶部「关联目标」，任务就会出现在这里。
+        </p>
       ) : (
         tasks.map((t, i) => (
-          <div
+          <Link
             key={t.id}
+            href={t.conversation_id ? `/conversation?id=${t.conversation_id}` : '/tasks'}
             className={cn(
-              'flex items-center gap-3 border-t border-line-soft px-5 py-2.5',
+              'flex items-center gap-3 border-t border-line-soft px-5 py-2.5 transition-colors hover:bg-fill',
               t.status === 'running' && 'bg-gradient-to-r from-brand-softer to-surface',
             )}
           >
@@ -190,7 +193,7 @@ function GoalTasks({ goal }: { goal: Goal }) {
               {t.title}
             </span>
             {t.assignee_name && <AgentAvatar name={t.assignee_name} size={20} />}
-          </div>
+          </Link>
         ))
       )}
       {convCount > 0 && (
